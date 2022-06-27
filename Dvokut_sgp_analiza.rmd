@@ -1,0 +1,228 @@
+---
+title: "Dvokut_sgp_Medvednica - Transformacija sirovih tablica"
+author: "Nikola Geršak"
+date: "01/02/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(xlsx)
+options(readr.show_progress = F)
+
+```
+
+Nakon uspješnog skrejpanja i ekstrakcije s weba u pythonu, imam nekih 600-njak tablica u xlsx formatu u kojima su zapisani podaci izmjere.
+Te tablice želim spojiti u nekih 20-ak tablica koje su spojene po kriteriju pripadnosti odjelu i odsjeku.
+Nakon toga želim ih zapisati u Konradovu exelicu.
+
+Dakle, koraci su: 
+
+<ol>
+
+učitavanje
+klasificiranje u odsjeke
+spajanje
+transponiranje
+ispis tablica
+</ol>
+
+
+# Učitavanje {-}
+
+Učitavat ću pomoću paketa xlsx svih 600 tablica. Bilo bi dobro da prije toga oduzmem točke koje neće ući u program. Podatke o tomu imam u jednoj tablici koje ću pohraniti u varijablu `tocke`. Napravit ću listu fajlova koje treba učitati pod nazivom `filenames`.
+
+
+```{r, message=FALSE}
+#informacije o točkama i odsjecima
+tocke <- read_csv2("Konacne_tocke.csv")
+glimpse(tocke)
+
+#lista fajlova
+Peth_csv <- "C:\\Users\\Ivona\\Documents\\R\\Dvokut_SGP-medvednica_R\\Izmjera_mnap_ispis_csv\\"
+filenames_csv <- list.files(path = Peth_csv, pattern = "*.csv")
+
+#dakle fajlovi točaka koje ulaze u program
+glimpse(filenames_csv[tocke$tocka])
+
+#dio za csv
+filenames_csv[tocke$tocka] %>% .[!is.na(.)] %>% str_c(Peth_csv,.) -> fajlovi_csv
+glimpse(fajlovi_csv)
+
+#učitavanje fajlova
+data <- map(setNames(fajlovi_csv, str_extract(fajlovi_csv, pattern = "\\d+")), function(x) read_csv(file = x, col_names = F))
+
+```
+
+Prvo sam napravio za xlsx fajlove, ali sam se predomislio jer traje malo dulje i zauzimaju više memorije, vjerojatno je bolje raditi u csv fajlovima. Što se tiče deformiranih hrvatskih dijakritičkih znakova nije problem, kasnije će se vjerojatno formatirati u dobar oblik.
+
+```{r, eval=F}
+#dio za xlsx
+Peth_xslx <- "C:\\Users\\Ivona\\Documents\\R\\Dvokut_SGP-medvednica_R\\Izmjera_mnap_ispis_xlsx"
+filenames_xslx <- list.files(path = Peth_xslx, pattern = "*.xlsx")
+filenames_xslx[tocke$tocka] %>% .[!is.na(.)] %>% str_c(Peth_xslx,"\\",.) -> fajlovi_xslx
+data_xslx <- map(setNames(fajlovi_xslx, str_extract(fajlovi_xslx, pattern = "\\d+")), function(x) read.xlsx(sheetIndex=1, file =x, header = F))
+
+```
+
+
+I dobro, sad bih trebao spojiti tablice u veće tablice po odsjecima. Trebao bih možda učitati tablice u global environment ili neki drugi environment. Razlog je lakša i brža manipulacija podacima za razliku od lista za koje treba više vremena da ih se proanalizira.
+
+
+</br>
+
+# Preuređivanje tablica {-}
+
+Nakon što sam učitao sve te tablice u novi environment mogao bih im izbrisati ovaj prvi red koji ne trebam i nazvati stupce prema drugom, odnosno novom prvom redu. Nakon toga bih tek mogao spojiti tablicu/tablice po odsjecima.
+Dakle, kompletno preuređenje tablica slijedi.
+
+```{r, message=F, warning=F, results=F}
+
+#dakle, napravio sam svoju funkciju koja preimenuje imena stupaca i briše prva tri nepotrebna reda (sastavila je ime od 2. i 3. reda), prije toga sam učitao podatke u novi environment kako bih lakše dohvaćao tablice po redu
+
+e <- new.env()
+list2env(data, e)
+
+e <- map(setNames(ls(e), as.character(ls(e))), function(x) {
+  x <- get(as.character(x), envir = e)
+  z <- str_c(x[2,]," - ", x[3,])
+  colnames(x) <- str_c(x[2,]," - ", x[3,])
+  x <- x[-(1:3),]
+  y <- x[,1]
+  x <- map(x[,-1], as.numeric) %>% as.data.frame()
+  colnames(x) <- unlist(z[-1])
+    
+  x[is.na(x)] <- 0 #NA zadaje probleme jer se ne može zbrajati s varijablama
+  
+  y <- seq(2.5,97.5,5)[1:length(x[,1])] #R4
+  x <- cbind(y,x) 
+  x
+})
+
+```
+
+</br>
+
+# Spajanje tablica po odsjecima {-}
+
+I sad konačno, spajanje tablica po odsjecima. Prije nego što spojim tablice, treba mi nešto po čemu ću iterirati odnosno prema čemu mogu spojiti tablice. To će biti lista odsjeka s pripadajućim točkama. 
+
+```{r, messagge= F, warning=F, results=F}
+#trebalo bi izbrisati one točke koje imaju prazne tablice (zbog toga što su šikare)
+prazne_tablice <- c(91,143,333,441,421,479,461,488,590)
+#zapravo, ne trebam u petlji ću ih preskočiti
+
+#apply da svaki odsjek ima sebi pripadajuće točke u listi odsjeka i da se svaka podlista zove po odsjeku
+
+lista_odsjeka <- map(set_names(unique(tocke$odsjek), unique(tocke$odsjek)), function(x){
+  y <- tocke %>% dplyr::filter(odsjek == x) %>% dplyr::select(tocka) %>% unlist %>% unname %>% as.character()
+  x <- y
+  x
+})
+```
+
+Tablice su spajane jedna na drugu po redovima, što znači da ću nakon toga samo zbrojiti sve tako da grupiram varijable prema stupcu u kojem se nalaze debljinski stupnjevi.
+
+```{r, messagge= F, warning=F, results=F}
+#spajanje tablica, micanje NA vrijednosti, grupiranje i konačan output
+
+tablis <- map(lista_odsjeka, function(x) {
+  z <- bind_rows(e[x])
+  z[is.na(z)] <- 0
+  z %>% group_by(y) %>% summarise(across(.fns = sum)) -> z
+  z
+})
+
+#glimpse(tablis)
+
+#nakon toga odsjeke, kojima sam dao ime, prebacim u eivnronment pa imam varijable
+e2 <- new.env()
+list2env(tablis, e2)
+
+```
+
+# ispis tablica {-}
+
+Ok, sad kad sam konačno uspio pospajati te sve tablice kako želim, sad ih trebam i izvesti u željeni oblik. Dakle svaku tablicu po odsjeku izvesti u zaseban csv/excel fajl.
+
+```{r, eval=F}
+#ispisivanje u csv
+Peth_odsjeci <- "C:\\Users\\Ivona\\Documents\\R\\Dvokut_SGP-medvednica_R\\Izmjera_mnap_odsjeci\\"
+map(ls(tablis), function(x){
+  #write_csv(as.data.frame(tablis[x]), path = str_c(Peth_odsjeci, x, ".csv"))
+  #write.xlsx(tablis[x], file = str_c(Peth_odsjeci, x,".xlsx"), row.names = F)
+})
+
+```
+Budući da me petlja odnosno apply/map zeza, mogu to učiniti i na mehanički način.
+
+```{r,eval=F}
+
+#printanje svih csv-ova koje treba izvesti
+write_csv(tablis$"1A", path = str_c(Peth_odsjeci, "1A", ".csv"))
+write_csv(tablis$"2A", path = str_c(Peth_odsjeci, "2A", ".csv"))
+write_csv(tablis$"3A", path = str_c(Peth_odsjeci, "3A", ".csv"))
+write_csv(tablis$"4A", path = str_c(Peth_odsjeci, "4A", ".csv"))
+write_csv(tablis$"5A", path = str_c(Peth_odsjeci, "5A", ".csv"))
+write_csv(tablis$"6A", path = str_c(Peth_odsjeci, "6A", ".csv"))
+write_csv(tablis$"7A", path = str_c(Peth_odsjeci, "7A", ".csv"))
+write_csv(tablis$"10A", path = str_c(Peth_odsjeci, "10A", ".csv"))
+write_csv(tablis$"9A", path = str_c(Peth_odsjeci, "9A", ".csv"))
+write_csv(tablis$"13A", path = str_c(Peth_odsjeci, "13A", ".csv"))
+write_csv(tablis$"12A", path = str_c(Peth_odsjeci, "12A", ".csv"))
+write_csv(tablis$"12B", path = str_c(Peth_odsjeci, "12B", ".csv"))
+write_csv(tablis$"11A", path = str_c(Peth_odsjeci, "11A", ".csv"))
+write_csv(tablis$"14A", path = str_c(Peth_odsjeci, "14A", ".csv"))
+write_csv(tablis$"18A", path = str_c(Peth_odsjeci, "18A", ".csv"))
+write_csv(tablis$"13B", path = str_c(Peth_odsjeci, "13B", ".csv"))
+write_csv(tablis$"19A", path = str_c(Peth_odsjeci, "19A", ".csv"))
+write_csv(tablis$"20A", path = str_c(Peth_odsjeci, "20A", ".csv"))
+write_csv(tablis$"21A", path = str_c(Peth_odsjeci, "21A", ".csv"))
+write_csv(tablis$"22A", path = str_c(Peth_odsjeci, "22A", ".csv"))
+write_csv(tablis$"23A", path = str_c(Peth_odsjeci, "23A", ".csv"))
+write_csv(tablis$"24A", path = str_c(Peth_odsjeci, "24A", ".csv"))
+write_csv(tablis$"25A", path = str_c(Peth_odsjeci, "25A", ".csv"))
+write_csv(tablis$"17A", path = str_c(Peth_odsjeci, "17A", ".csv"))
+write_csv(tablis$"16A", path = str_c(Peth_odsjeci, "16A", ".csv"))
+write_csv(tablis$"15A", path = str_c(Peth_odsjeci, "15A", ".csv"))
+write_csv(tablis$"9B", path = str_c(Peth_odsjeci, "9B", ".csv"))
+write_csv(tablis$"8A", path = str_c(Peth_odsjeci, "8A", ".csv"))
+write_csv(tablis$"4A", path = str_c(Peth_odsjeci, "4B", ".csv"))
+
+#printanje svih exelica koje treba izvesti
+
+write.xlsx(tablis$"1A", file = str_c(Peth_odsjeci, "1A",".xlsx"), row.names = F)
+write.xlsx(tablis$"2A", file = str_c(Peth_odsjeci, "2A",".xlsx"), row.names = F)
+write.xlsx(tablis$"3A", file = str_c(Peth_odsjeci, "3A",".xlsx"), row.names = F)
+write.xlsx(tablis$"4A", file = str_c(Peth_odsjeci, "4A",".xlsx"), row.names = F)
+write.xlsx(tablis$"5A", file = str_c(Peth_odsjeci, "5A",".xlsx"), row.names = F)
+write.xlsx(tablis$"6A", file = str_c(Peth_odsjeci, "6A",".xlsx"), row.names = F)
+write.xlsx(tablis$"7A", file = str_c(Peth_odsjeci, "7A",".xlsx"), row.names = F)
+write.xlsx(tablis$"10A", file = str_c(Peth_odsjeci, "10A",".xlsx"), row.names = F)
+write.xlsx(tablis$"9A", file = str_c(Peth_odsjeci, "9A",".xlsx"), row.names = F)
+write.xlsx(tablis$"13A", file = str_c(Peth_odsjeci, "13A",".xlsx"), row.names = F)
+write.xlsx(tablis$"12A", file = str_c(Peth_odsjeci, "12A",".xlsx"), row.names = F)
+write.xlsx(tablis$"12B", file = str_c(Peth_odsjeci, "12B",".xlsx"), row.names = F)
+write.xlsx(tablis$"11A", file = str_c(Peth_odsjeci, "11A",".xlsx"), row.names = F)
+write.xlsx(tablis$"14A", file = str_c(Peth_odsjeci, "14A",".xlsx"), row.names = F)
+write.xlsx(tablis$"18A", file = str_c(Peth_odsjeci, "18A",".xlsx"), row.names = F)
+write.xlsx(tablis$"13B", file = str_c(Peth_odsjeci, "13B",".xlsx"), row.names = F)
+write.xlsx(tablis$"19A", file = str_c(Peth_odsjeci, "19A",".xlsx"), row.names = F)
+write.xlsx(tablis$"20A", file = str_c(Peth_odsjeci, "20A",".xlsx"), row.names = F)
+write.xlsx(tablis$"21A", file = str_c(Peth_odsjeci, "21A",".xlsx"), row.names = F)
+write.xlsx(tablis$"22A", file = str_c(Peth_odsjeci, "22A",".xlsx"), row.names = F)
+write.xlsx(tablis$"23A", file = str_c(Peth_odsjeci, "23A",".xlsx"), row.names = F)
+write.xlsx(tablis$"24A", file = str_c(Peth_odsjeci, "24A",".xlsx"), row.names = F)
+write.xlsx(tablis$"25A", file = str_c(Peth_odsjeci, "25A",".xlsx"), row.names = F)
+write.xlsx(tablis$"17A", file = str_c(Peth_odsjeci, "17A",".xlsx"), row.names = F)
+write.xlsx(tablis$"16A", file = str_c(Peth_odsjeci, "16A",".xlsx"), row.names = F)
+write.xlsx(tablis$"15A", file = str_c(Peth_odsjeci, "15A",".xlsx"), row.names = F)
+write.xlsx(tablis$"9B", file = str_c(Peth_odsjeci, "9B",".xlsx"), row.names = F)
+write.xlsx(tablis$"8A", file = str_c(Peth_odsjeci, "8A",".xlsx"), row.names = F)
+write.xlsx(tablis$"4B", file = str_c(Peth_odsjeci, "4B",".xlsx"), row.names = F)
+
+
+```
+
