@@ -1,0 +1,159 @@
+---
+title: "Transformation of raw data from the inventory"
+author: "Nikola Geršak"
+date: "01/02/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(xlsx)
+options(readr.show_progress = F)
+
+```
+
+The data I have concerns the forest inventory of forest on Medvednica mountain above the Zagreb city. This inventory data was collected in the summer of 2020 on the fieldwork. To ease the process, it was written in a simple web app. From the web app, it was extracted into the small tables in .csv (and .xlsx) format. Now there are about 600 tables.
+
+I want to combine these tables into 25 tables that are combined according to the criteria of belonging to the forest stand.
+
+So, the steps would be: 
+
+<ol>
+
+loading
+classification into departments/forest stands
+merging
+transposing
+printing tables
+</ol>
+
+
+# Loading {-}
+
+I will load using the xlsx package all 600 tables. It would be good if I take away the points that will not enter the program before that. I have data about that in one table, which I will store in the `points' variable. I will make a list of files to be uploaded named `filenames`.
+
+
+```{r, message=FALSE}
+#info about the points and forest stands/departments
+tocke <- read_csv2("Konacne_tocke.csv")
+glimpse(tocke)
+
+#list of files
+Peth_csv <- "C:\\Users\\Ivona\\Documents\\R\\Dvokut_SGP-medvednica_R\\Izmjera_mnap_ispis_csv\\"
+filenames_csv <- list.files(path = Peth_csv, pattern = "*.csv")
+
+#files of points that were measured in the field
+glimpse(filenames_csv[tocke$tocka])
+
+#csv files
+filenames_csv[tocke$tocka] %>% .[!is.na(.)] %>% str_c(Peth_csv,.) -> fajlovi_csv
+glimpse(fajlovi_csv)
+
+#load the files into variable
+data <- map(setNames(fajlovi_csv, str_extract(fajlovi_csv, pattern = "\\d+")), function(x) read_csv(file = x, col_names = F))
+
+```
+
+At first I made it for xlsx files, but I changed my mind because it takes a little longer and takes up more memory, it's probably better to work in csv files. As for the deformed Croatian diacritical marks, it is not a problem, it will probably be formatted in a good form later.
+
+```{r, eval=F}
+#optional part for xlsx files
+Peth_xslx <- "C:\\Users\\Ivona\\Documents\\R\\Dvokut_SGP-medvednica_R\\Izmjera_mnap_ispis_xlsx"
+filenames_xslx <- list.files(path = Peth_xslx, pattern = "*.xlsx")
+filenames_xslx[tocke$tocka] %>% .[!is.na(.)] %>% str_c(Peth_xslx,"\\",.) -> fajlovi_xslx
+data_xslx <- map(setNames(fajlovi_xslx, str_extract(fajlovi_xslx, pattern = "\\d+")), function(x) read.xlsx(sheetIndex=1, file =x, header = F))
+
+```
+
+
+And well, now I should merge the tables into larger tables by forest stands. I should maybe load the tables in the global environment or some other environment. The reason is the easier and faster manipulation of the data in contrast to the list, which takes more time to analyze.
+
+</br>
+
+# Data manipulation {-}
+
+After I loaded all those tables into the new environment, I could delete this first row, which I don't need, and name the columns according to the second, i.e. the new first row. After that, I could only connect the table/tables by section.
+So, a complete rearrangement of the tables follows.
+
+```{r, message=F, warning=F, results=F}
+
+#so, I made my own function that renames the column names and deletes the first three unnecessary rows (it made up the name from the 2nd and 3rd rows), before that I loaded the data into a new environment to make it easier to retrieve the tables by row
+
+e <- new.env()
+list2env(data, e)
+
+e <- map(setNames(ls(e), as.character(ls(e))), function(x) {
+  x <- get(as.character(x), envir = e)
+  z <- str_c(x[2,]," - ", x[3,])
+  colnames(x) <- str_c(x[2,]," - ", x[3,])
+  x <- x[-(1:3),]
+  y <- x[,1]
+  x <- map(x[,-1], as.numeric) %>% as.data.frame()
+  colnames(x) <- unlist(z[-1])
+    
+  x[is.na(x)] <- 0 #NA only gives problems so should be removed
+  
+  y <- seq(2.5,97.5,5)[1:length(x[,1])] #R4
+  x <- cbind(y,x) 
+  x
+})
+
+```
+
+</br>
+
+# Joining tables by forest stands {-}
+
+And now finally, merging tables by section. Before I join the tables, I need something to iterate on, that is, according to which I can join the tables. It will be a list of forest stands with corresponding points.
+
+```{r, messagge= F, warning=F, results=F}
+#I should delete those points that have empty tables (because they represent bushland)
+prazne_tablice <- c(91,143,333,441,421,479,461,488,590)
+#actually, I can skip it later in the loop
+
+#apply that each forest stand has its own points in the list of forest stands and that each sublist is named after the forest stand
+
+lista_odsjeka <- map(set_names(unique(tocke$odsjek), unique(tocke$odsjek)), function(x){
+  y <- tocke %>% dplyr::filter(odsjek == x) %>% dplyr::select(tocka) %>% unlist %>% unname %>% as.character()
+  x <- y
+  x
+})
+```
+
+The tables are joined to each other by rows, which means that after that I will just sum everything up by grouping the variables according to the column where the DBH measures are.
+
+```{r, messagge= F, warning=F, results=F}
+#merging tables, removing NA values, grouping and final output
+
+tablis <- map(lista_odsjeka, function(x) {
+  z <- bind_rows(e[x])
+  z[is.na(z)] <- 0
+  z %>% group_by(y) %>% summarise(across(.fns = sum)) -> z
+  z
+})
+
+#glimpse(tablis)
+
+#after that, I transfer the forest stands, to which I gave a name, to the environment, so I have variables
+e2 <- new.env()
+list2env(tablis, e2)
+
+```
+
+# Export of tables {-}
+
+Ok, now that I finally managed to connect all the tables as I want, now I need to export them to the desired form. Therefore, export each table by section into a separate csv/excel file.
+
+```{r, eval=F}
+#ispisivanje u csv
+Peth_odsjeci <- "C:\\Users\\Nikola\\Documents\\GitHub\\Medvednica-forest_programme"
+map(ls(tablis), function(x){
+  write_csv(as.data.frame(tablis[x]), path = str_c(Peth_odsjeci, x, ".csv"))
+  #write.xlsx(tablis[x], file = str_c(Peth_odsjeci, x,".xlsx"), row.names = F)
+})
+
+```
+
+Voila!

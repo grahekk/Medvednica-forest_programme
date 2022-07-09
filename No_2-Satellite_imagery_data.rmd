@@ -1,0 +1,61 @@
+---
+title: "Satelite Imagery data"
+author: "Nikola Geršak"
+date: "2022-07-09"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(sen2r)
+```
+
+The data I obtained from the first rmd document concerns the inventory of forests. In the second step, I would like to correlate this data with the satellite data from the copernicus's sentinell 2 satelite and see where this will take me. I suppose this process can be separated in few steps I can think of:
+
+<ol>
+
+get the satellite images from sentinel 2 
+calculate the vegetation indices
+merge the inventory data with the indices by points that represent geolocations
+draw some graphs
+predict the biomass of the rest of Medvednica, or the tree types, or species distribution 
+</ol>
+
+
+
+## Obtaining the satellite images of the area {-}
+
+I will get them with the help of sen2r library
+
+```{r}
+s2_list() #to retrieve the list of available Sentinel-2 products based on input parameters;
+s2_download() #to download Sentinel-2 products;
+s2_order()
+```
+
+## Vegetation indices {-}
+
+```{r}
+library(raster)
+#raslist <- paste0('data/rs/LC08_044034_20170614_B', 1:11, ".tif")
+sentinell <- stack(raslist)
+
+vi <- function(img, k, i) {
+  bk <- img[[k]]
+  bi <- img[[i]]
+  vi <- (bk - bi) / (bk + bi)
+  return(vi)
+}
+
+ndvi <- vi(sentinell, 5, 4)
+plot(ndvi, col = rev(terrain.colors(10)), main = "Sentinell-NDVI")
+
+#extract from raster to get the ndvi values for points and merge them with specified points
+extract(ndvi)
+
+```
+
+# Correlation {-}
+
+After merging the vegetation indices with inventory data I can correlate it as well as to do the PCA, lm, glm etc.
